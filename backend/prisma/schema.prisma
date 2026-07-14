@@ -1,0 +1,829 @@
+generator client {
+  provider = "prisma-client"
+  output   = "./src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ===================================================================
+// ENUMS
+// ===================================================================
+
+enum SubscriptionStatus {
+  ACTIVE
+  INACTIVE
+  CANCELED
+  PAST_DUE
+  TRIALING
+}
+
+enum BroadcastStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  PAUSED
+  COMPLETED
+  CANCELED
+  FAILED
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  BUTTON
+  QUICK_REPLY
+  CAROUSEL
+  TEMPLATE
+}
+
+enum FlowNodeType {
+  START
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  BUTTONS
+  QUICK_REPLIES
+  CAROUSEL
+  GALLERY
+  DELAY
+  CONDITION
+  RANDOM_SPLIT
+  KEYWORD
+  TAG_CONDITION
+  API_REQUEST
+  WEBHOOK
+  OPENAI
+  HTTP_REQUEST
+  JSON_PARSER
+  VARIABLES
+  SET_VARIABLE
+  IF_ELSE
+  GOAL
+  END
+}
+
+enum AutomationActionType {
+  REPLY_TEXT
+  REPLY_IMAGE
+  LIKE_COMMENT
+  HIDE_COMMENT
+  DELETE_COMMENT
+  SEND_MESSENGER
+  ASSIGN_TAG
+  ASSIGN_CUSTOM_FIELD
+  TRIGGER_WORKFLOW
+  ADD_NOTE
+}
+
+enum ConversationStatus {
+  ACTIVE
+  WAITING
+  CLOSED
+  ARCHIVED
+}
+
+enum NotificationType {
+  BROADCAST_COMPLETE
+  BROADCAST_FAILED
+  SUBSCRIBER_GAINED
+  SUBSCRIBER_LOST
+  AUTOMATION_TRIGGERED
+  SYSTEM_ALERT
+  TEAM_INVITE
+  SUBSCRIPTION_EXPIRING
+  PAYMENT_FAILED
+}
+
+// ===================================================================
+// USER & AUTH
+// ===================================================================
+
+model User {
+  id              String   @id @default(uuid()) @db.Uuid
+  email           String   @unique
+  emailVerifiedAt DateTime?
+  password        String?
+  firstName       String   @db.VarChar(100)
+  lastName        String   @db.VarChar(100)
+  avatarUrl       String?
+  googleId        String?  @unique
+  facebookId      String?  @unique
+  isActive        Boolean  @default(true)
+  isTwoFactorEnabled Boolean @default(false)
+  twoFactorSecret String?
+  lastLoginAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  roles            UserRole[]
+  workspaces       WorkspaceMember[]
+  ownedWorkspaces  Workspace[]           @relation("WorkspaceOwner")
+  apiTokens        ApiToken[]
+  sessions         Session[]
+  loginAttempts    LoginAttempt[]
+  activityLogs     ActivityLog[]
+  notifications    Notification[]
+  templates        Template[]
+  media            Media[]
+  invoices         Invoice[]
+  broadcasts       Broadcast[]
+  broadcastLogs    BroadcastLog[]
+  conversations    Conversation[]
+  messages         Message[]
+  auditLogs        AuditLog[]
+  settings         Settings?
+
+  @@index([email])
+  @@index([googleId])
+  @@index([facebookId])
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique @db.VarChar(50)
+  description String?  @db.VarChar(255)
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique @db.VarChar(100)
+  description String?  @db.VarChar(255)
+  resource    String   @db.VarChar(50)
+  action      String   @db.VarChar(50)
+  createdAt   DateTime @default(now())
+
+  roles       RolePermission[]
+
+  @@index([resource, action])
+  @@map("permissions")
+}
+
+model UserRole {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  roleId    String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  id           String   @id @default(uuid()) @db.Uuid
+  roleId       String   @db.Uuid
+  permissionId String   @db.Uuid
+  createdAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model Session {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @db.Uuid
+  refreshToken  String   @unique
+  userAgent     String?  @db.VarChar(500)
+  ipAddress     String?  @db.VarChar(45)
+  isRevoked     Boolean  @default(false)
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  revokedAt     DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([refreshToken])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model LoginAttempt {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String?  @db.Uuid
+  email     String   @db.VarChar(255)
+  ipAddress String?  @db.VarChar(45)
+  userAgent String?  @db.VarChar(500)
+  success   Boolean
+  reason    String?  @db.VarChar(255)
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([email])
+  @@index([createdAt])
+  @@map("login_attempts")
+}
+
+// ===================================================================
+// WORKSPACE & TEAMS
+// ===================================================================
+
+model Workspace {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @db.VarChar(200)
+  slug        String   @unique @db.VarChar(200)
+  description String?  @db.VarChar(500)
+  logoUrl     String?
+  ownerId     String   @db.Uuid
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  owner           User               @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  members         WorkspaceMember[]
+  facebookPages   FacebookPage[]
+  subscribers     Subscriber[]
+  tags            Tag[]
+  broadcasts      Broadcast[]
+  flows           Flow[]
+  commentAutomations CommentAutomation[]
+  conversations   Conversation[]
+  templates       Template[]
+  apiTokens       ApiToken[]
+  settings        WorkspaceSettings?
+  activityLogs    ActivityLog[]
+  notifications   Notification[]
+  keywords        Keyword[]
+  coupons         Coupon[]
+  subscription    Subscription?
+
+  @@index([ownerId])
+  @@index([slug])
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String             @id @default(uuid()) @db.Uuid
+  workspaceId String             @db.Uuid
+  userId      String             @db.Uuid
+  role        WorkspaceMemberRole @default(MEMBER)
+  joinedAt    DateTime           @default(now())
+  createdAt   DateTime           @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+enum WorkspaceMemberRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+model WorkspaceSettings {
+  id              String   @id @default(uuid()) @db.Uuid
+  workspaceId     String   @unique @db.Uuid
+  timezone        String   @default("UTC") @db.VarChar(50)
+  language        String   @default("en") @db.VarChar(10)
+  theme           String   @default("light") @db.VarChar(10)
+  darkMode        Boolean  @default(false)
+  emailNotifications Boolean @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("workspace_settings")
+}
+
+model Team {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @db.VarChar(200)
+  description String?  @db.VarChar(500)
+  workspaceId String   @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  members   TeamMember[]
+
+  @@index([workspaceId])
+  @@map("teams")
+}
+
+model TeamMember {
+  id        String   @id @default(uuid()) @db.Uuid
+  teamId    String   @db.Uuid
+  userId    String   @db.Uuid
+  role      String   @default("member") @db.VarChar(50)
+  createdAt DateTime @default(now())
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@map("team_members")
+}
+
+// ===================================================================
+// FACEBOOK PAGES
+// ===================================================================
+
+model FacebookPage {
+  id                 String   @id @default(uuid()) @db.Uuid
+  facebookPageId     String   @db.VarChar(100)
+  workspaceId        String   @db.Uuid
+  name               String   @db.VarChar(200)
+  category           String?  @db.VarChar(100)
+  pictureUrl         String?
+  accessToken        String   @db.Text
+  tokenExpiresAt     DateTime?
+  longLivedToken     String?  @db.Text
+  isConnected        Boolean  @default(true)
+  webhookSubscribed  Boolean  @default(false)
+  followersCount     Int      @default(0)
+  isActive           Boolean  @default(true)
+  lastWebhookAt      DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  workspace          Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  subscribers        Subscriber[]
+  broadcasts         Broadcast[]
+  conversations      Conversation[]
+  commentAutomations CommentAutomation[]
+  keywords           Keyword[]
+  webhookLogs        WebhookLog[]
+  analytics          Analytics[]
+
+  @@unique([facebookPageId, workspaceId])
+  @@index([workspaceId])
+  @@index([facebookPageId])
+  @@map("facebook_pages")
+}
+
+// ===================================================================
+// SUBSCRIBERS
+// ===================================================================
+
+model Subscriber {
+  id                  String   @id @default(uuid()) @db.Uuid
+  facebookId          String   @db.VarChar(100)
+  workspaceId         String   @db.Uuid
+  pageId              String   @db.Uuid
+  name                String   @db.VarChar(200)
+  firstName           String?  @db.VarChar(100)
+  lastName            String?  @db.VarChar(100)
+  profilePic          String?
+  locale              String?  @db.VarChar(10)
+  timezone            String?  @db.VarChar(50)
+  gender              String?  @db.VarChar(10)
+  country             String?  @db.VarChar(100)
+  language            String?  @db.VarChar(10)
+  isFollowed          Boolean  @default(true)
+  isMessaged          Boolean  @default(false)
+  lastInteractionAt   DateTime?
+  firstInteractionAt  DateTime?
+  messengerStatus     MessengerStatus @default(ACTIVE)
+  subscribedAt        DateTime @default(now())
+  unsubscribedAt      DateTime?
+  tags                String?  @db.Text
+  customFields        Json?
+  notes               String?  @db.Text
+  metadata            Json?
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  workspace      Workspace      @relation(fields: [workspaceId], references: [id])
+  page           FacebookPage   @relation(fields: [pageId], references: [id])
+  conversations  Conversation[]
+  messages       Message[]
+  tagsRelation   SubscriberTag[]
+  broadcastLogs  BroadcastLog[]
+  automationLogs CommentAutomationLog[]
+
+  @@unique([facebookId, workspaceId])
+  @@index([workspaceId])
+  @@index([pageId])
+  @@index([facebookId])
+  @@index([country])
+  @@index([language])
+  @@index([createdAt])
+  @@map("subscribers")
+}
+
+enum MessengerStatus {
+  ACTIVE
+  BLOCKED
+  UNSUBSCRIBED
+}
+
+model Tag {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @db.VarChar(100)
+  color       String   @default("#6366f1") @db.VarChar(7)
+  workspaceId String   @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace    Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  subscribers  SubscriberTag[]
+
+  @@unique([name, workspaceId])
+  @@index([workspaceId])
+  @@map("tags")
+}
+
+model SubscriberTag {
+  id           String   @id @default(uuid()) @db.Uuid
+  subscriberId String   @db.Uuid
+  tagId        String   @db.Uuid
+  createdAt    DateTime @default(now())
+
+  subscriber Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  tag        Tag        @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([subscriberId, tagId])
+  @@map("subscriber_tags")
+}
+
+// ===================================================================
+// CONVERSATIONS & MESSAGES
+// ===================================================================
+
+model Conversation {
+  id              String             @id @default(uuid()) @db.Uuid
+  workspaceId     String             @db.Uuid
+  pageId          String             @db.Uuid
+  subscriberId    String             @db.Uuid
+  assigneeId      String?            @db.Uuid
+  status          ConversationStatus @default(ACTIVE)
+  isPinned        Boolean            @default(false)
+  lastMessageAt   DateTime?
+  lastMessageText String?            @db.Text
+  unreadCount     Int                @default(0)
+  metadata        Json?
+  closedAt        DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  workspace      Workspace    @relation(fields: [workspaceId], references: [id])
+  page           FacebookPage @relation(fields: [pageId], references: [id])
+  subscriber     Subscriber   @relation(fields: [subscriberId], references: [id])
+  assignee       User?        @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+  messages       Message[]
+  notes          ConversationNote[]
+
+  @@unique([pageId, subscriberId])
+  @@index([workspaceId])
+  @@index([pageId])
+  @@index([subscriberId])
+  @@index([assigneeId])
+  @@index([status])
+  @@index([lastMessageAt])
+  @@map("conversations")
+}
+
+model Message {
+  id             String      @id @default(uuid()) @db.Uuid
+  conversationId String      @db.Uuid
+  senderId       String?     @db.Uuid
+  subscriberId   String?     @db.Uuid
+  pageId         String?     @db.Uuid
+  facebookMessageId String?  @db.VarChar(200)
+  type           MessageType @default(TEXT)
+  content        Json?
+  text           String?     @db.Text
+  mediaUrl       String?
+  metadata       Json?
+  isFromPage     Boolean     @default(false)
+  isRead         Boolean     @default(false)
+  readAt         DateTime?
+  errorDetails   String?     @db.Text
+  sentAt         DateTime    @default(now())
+  createdAt      DateTime    @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User?        @relation(fields: [senderId], references: [id], onDelete: SetNull)
+  subscriber   Subscriber?  @relation(fields: [subscriberId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId])
+  @@index([senderId])
+  @@index([subscriberId])
+  @@index([sentAt])
+  @@map("messages")
+}
+
+model ConversationNote {
+  id             String   @id @default(uuid()) @db.Uuid
+  conversationId String   @db.Uuid
+  authorId       String   @db.Uuid
+  content        String   @db.Text
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  author       User         @relation(fields: [authorId], references: [id])
+
+  @@index([conversationId])
+  @@index([authorId])
+  @@map("conversation_notes")
+}
+
+// ===================================================================
+// BROADCASTS
+// ===================================================================
+
+model Broadcast {
+  id              String          @id @default(uuid()) @db.Uuid
+  workspaceId     String          @db.Uuid
+  pageId          String          @db.Uuid
+  name            String          @db.VarChar(200)
+  subject         String?         @db.VarChar(500)
+  messageType     MessageType     @default(TEXT)
+  content         Json?
+  status          BroadcastStatus @default(DRAFT)
+  scheduledAt     DateTime?
+  sentAt          DateTime?
+  completedAt     DateTime?
+  totalRecipients Int             @default(0)
+  sentCount       Int             @default(0)
+  deliveredCount  Int             @default(0)
+  openedCount     Int             @default(0)
+  clickedCount    Int             @default(0)
+  failedCount     Int             @default(0)
+  filterTags      String?         @db.Text
+  filterCountries String?         @db.Text
+  filterLanguages String?         @db.Text
+  isRecurring     Boolean         @default(false)
+  recurringCron   String?         @db.VarChar(100)
+  abTestEnabled   Boolean         @default(false)
+  abTestVariants  Json?
+  abTestWinner    String?         @db.VarChar(50)
+  isPaused        Boolean         @default(false)
+  retryCount      Int             @default(0)
+  maxRetries      Int             @default(3)
+  metadata        Json?
+  createdById     String          @db.Uuid
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  workspace      Workspace       @relation(fields: [workspaceId], references: [id])
+  page           FacebookPage    @relation(fields: [pageId], references: [id])
+  createdBy      User            @relation(fields: [createdById], references: [id])
+  broadcastLogs  BroadcastLog[]
+
+  @@index([workspaceId])
+  @@index([pageId])
+  @@index([status])
+  @@index([scheduledAt])
+  @@index([createdById])
+  @@map("broadcasts")
+}
+
+model BroadcastLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  broadcastId  String   @db.Uuid
+  subscriberId String   @db.Uuid
+  recipientId  String?  @db.VarChar(100)
+  status       String   @default("pending") @db.VarChar(20)
+  deliveredAt  DateTime?
+  openedAt     DateTime?
+  clickedAt    DateTime?
+  errorMessage String?  @db.Text
+  attemptCount Int      @default(0)
+  metadata     Json?
+  sentById     String?  @db.Uuid
+  createdAt    DateTime @default(now())
+
+  broadcast  Broadcast  @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  subscriber Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  sentBy     User?      @relation(fields: [sentById], references: [id])
+
+  @@index([broadcastId])
+  @@index([subscriberId])
+  @@index([status])
+  @@map("broadcast_logs")
+}
+
+// ===================================================================
+// FLOW BUILDER (Chatbot)
+// ===================================================================
+
+model Flow {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @db.VarChar(200)
+  description String?  @db.VarChar(500)
+  workspaceId String   @db.Uuid
+  isActive    Boolean  @default(false)
+  trigger     String   @default("keyword") @db.VarChar(50)
+  triggerKeywords String? @db.Text
+  version     Int      @default(1)
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  nodes       FlowNode[]
+  connections FlowConnection[]
+  versions    FlowVersion[]
+
+  @@index([workspaceId])
+  @@map("flows")
+}
+
+model FlowNode {
+  id        String       @id @default(uuid()) @db.Uuid
+  flowId    String       @db.Uuid
+  type      FlowNodeType
+  label     String?      @db.VarChar(200)
+  positionX Float        @default(0)
+  positionY Float        @default(0)
+  config    Json?
+  metadata  Json?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  flow Flow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+
+  @@index([flowId])
+  @@map("flow_nodes")
+}
+
+model FlowConnection {
+  id           String   @id @default(uuid()) @db.Uuid
+  flowId       String   @db.Uuid
+  sourceNodeId String   @db.Uuid
+  targetNodeId String   @db.Uuid
+  sourceHandle String?  @db.VarChar(50)
+  targetHandle String?  @db.VarChar(50)
+  label        String?  @db.VarChar(200)
+  condition    String?  @db.Text
+  createdAt    DateTime @default(now())
+
+  flow       Flow     @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  sourceNode FlowNode @relation("SourceNode", fields: [sourceNodeId], references: [id], onDelete: Cascade)
+  targetNode FlowNode @relation("TargetNode", fields: [targetNodeId], references: [id], onDelete: Cascade)
+
+  @@index([flowId])
+  @@index([sourceNodeId])
+  @@index([targetNodeId])
+  @@map("flow_connections")
+}
+
+model FlowVersion {
+  id        String   @id @default(uuid()) @db.Uuid
+  flowId    String   @db.Uuid
+  version   Int
+  nodes     Json?
+  connections Json?
+  metadata  Json?
+  createdBy String?  @db.Uuid
+  createdAt DateTime @default(now())
+
+  flow Flow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+
+  @@unique([flowId, version])
+  @@index([flowId])
+  @@map("flow_versions")
+}
+
+// ===================================================================
+// COMMENT AUTOMATION
+// ===================================================================
+
+model CommentAutomation {
+  id                String   @id @default(uuid()) @db.Uuid
+  name              String   @db.VarChar(200)
+  workspaceId       String   @db.Uuid
+  pageId            String   @db.Uuid
+  isActive          Boolean  @default(true)
+  replyToAll        Boolean  @default(false)
+  keywords          String?  @db.Text
+  ignoreKeywords    String?  @db.Text
+  replyOncePerUser  Boolean  @default(true)
+  delaySeconds      Int      @default(0)
+  likeComment       Boolean  @default(false)
+  hideComment       Boolean  @default(false)
+  deleteComment     Boolean  @default(false)
+  sendMessenger     Boolean  @default(false)
+  assignTags        String?  @db.Text
+  assignCustomFields Json?
+  triggerWorkflowId String?  @db.Uuid
+  addNote           String?  @db.Text
+  conditions        Json?
+  scheduling        Json?
+  replyMessage      String?  @db.Text
+  replyMediaUrl     String?  @db.Text
+  replyMessageType  String   @default("text") @db.VarChar(20)
+  totalTriggered    Int      @default(0)
+  lastTriggeredAt   DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  workspace      Workspace              @relation(fields: [workspaceId], references: [id])
+  page           FacebookPage           @relation(fields: [pageId], references: [id])
+  triggerWorkflow Flow?                 @relation(fields: [triggerWorkflowId], references: [id], onDelete: SetNull)
+  logs           CommentAutomationLog[]
+
+  @@index([workspaceId])
+  @@index([pageId])
+  @@index([isActive])
+  @@map("comment_automations")
+}
+
+model CommentAutomationLog {
+  id              String   @id @default(uuid()) @db.Uuid
+  automationId    String   @db.Uuid
+  subscriberId    String?  @db.Uuid
+  commentId       String?  @db.VarChar(200)
+  commentText     String?  @db.Text
+  action          String   @db.VarChar(50)
+  status          String   @default("success") @db.VarChar(20)
+  response        Json?
+  errorMessage    String?  @db.Text
+  createdAt       DateTime @default(now())
+
+  automation CommentAutomation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  subscriber Subscriber?       @relation(fields: [subscriberId], references: [id], onDelete: SetNull)
+
+  @@index([automationId])
+  @@index([subscriberId])
+  @@index([createdAt])
+  @@map("comment_automation_logs")
+}
+
+model Keyword {
+  id          String   @id @default(uuid()) @db.Uuid
+  keyword     String   @db.VarChar(200)
+  workspaceId String   @db.Uuid
+  pageId      String   @db.Uuid
+  type        String   @default("trigger") @db.VarChar(20)
+  response    String?  @db.Text
+  flowId      String?  @db.Uuid
+  isActive    Boolean  @default(true)
+  matchType   String   @default("exact") @db.VarChar(20)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  page      FacebookPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  flow      Flow?        @relation(fields: [flowId], references: [id], onDelete: SetNull)
+
+  @@unique([keyword, workspaceId, pageId])
+  @@index([workspaceId])
+  @@index([pageId])
+  @@map("keywords")
+}
+
+// ===================================================================
+// TEMPLATES & MEDIA
+// ===================================================================
+
+model Template {
+  id          String      @id @default(uuid()) @db.Uuid
+  name        String      @db.VarChar(200)
+  description String?     @db.VarChar(500)
+  type        MessageType @default(TEXT)
+  content     Json?
+  workspaceId String?     @db.Uuid
+  userId      String?     @db.Uuid
+  category    String?     @db.VarChar(50)
+  isGlobal    Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  user      User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@index([userId])
+  @@index([type])
+  @@map("templates")
+}
+
+model Media {
+  id          String   @id @default(uuid()) @db.Uuid
+  filename    String   @db.VarChar(500)
+  originalName String
